@@ -58,11 +58,11 @@
       showsScale: false,
       showsMapTypeControl: false,
       isZoomEnabled: true,
-      isScrollEnabled: true
       showsUserLocation: true,
-      showsUserLocationControl: true,
-      tracksUserLocation: true,
-
+showsUserLocationControl: true,
+tracksUserLocation: false,
+      isScrollEnabled: true
+      
     });
 
     // --- State ---
@@ -199,17 +199,6 @@
         map.addAnnotation(ann);
         buildingAnnotations.push(ann);
       });
-
-  if (buildingAnnotations.length > 0) {
-    const coords = buildingAnnotations.map(a => a.coordinate);
-    const region = mapkit.CoordinateRegion.regionFittingCoordinates(coords, {
-      minimumSpan: new mapkit.CoordinateSpan(0.01, 0.01) // Minimum zoom level
-    });
-    map.setRegion(region, true); // true = animated transition
-  }
-
-  console.log(`Showing ${buildingAnnotations.length} pins`);
-}
 
     function addRoutePolylines() {
       clearRoutes();
