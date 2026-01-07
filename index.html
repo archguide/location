@@ -17,68 +17,76 @@
   <div id="map"></div>
 
   <script>
-    // --- CONFIG ---
+    // --- CONFIG (YOUR KEYS) ---
     const SUPABASE_URL = 'https://msuzmrfzzkqffhpilirb.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdXptcmZ6emtxZmZocGlsaXJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY3NjY5NDAsImV4cCI6MjA4MjM0Mjk0MH0.kGHLaDT2FR9AAnZjP96FgAcSPjCQm6w9ifAqd6cEOoQ';
-    
-    const MAPKIT_TOKEN = 'eyJraWQiOiJSN05HVzZZNko3IiwidHlwIjoiSldUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiI4N05MV1VQUVFBIiwiaWF0IjoxNzY3NjcxMDk2LCJvcmlnaW4iOiJhcmNoZ3VpZGUuZ2l0aHViLmlvIn0.aGopUszusE4HfaiqItorz1NoVxzy5z46YItwrq43WVgyERsMm8kkmLZMJNUHd83c-icIhRra2mBFwgpdvYk-SA';
+    const SUPABASE_ANON_KEY =
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1zdXptcmZ6emtxZmZocGlsaXJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY3NjY5NDAsImV4cCI6MjA4MjM0Mjk0MH0.kGHLaDT2FR9AAnZjP96FgAcSPjCQm6w9ifAqd6cEOoQ';
+
+    const MAPKIT_TOKEN =
+      'eyJraWQiOiJSN05HVzZZNko3IiwidHlwIjoiRVMyNTYifQ.eyJpc3MiOiI4N05MV1VQUVFBIiwiaWF0IjoxNzY3NjcxMDk2LCJvcmlnaW4iOiJhcmNoZ3VpZGUuZ2l0aHViLmlvIn0.aGopUszusE4HfaiqItorz1NoVxzy5z46YItwrq43WVgyERsMm8kkmLZMJNUHd83c-icIhRra2mBFwgpdvYk-SA';
 
     const NEIGHBORHOOD_COLORS = {
-      'DTL': '#1150AB',
-      'SLV': '#2E7D6F',
-      'PAS': '#C56B3C',
-      'LFZ': '#E85D75',
-      'WHO': '#F4A261'
+      DTL: '#1150AB',
+      SLV: '#2E7D6F',
+      PAS: '#C56B3C',
+      LFZ: '#E85D75',
+      WHO: '#F4A261'
     };
 
-    // --- Get parameters from URL ---
+    // --- URL PARAMS ---
     const params = new URLSearchParams(window.location.search);
     const USER_ID = params.get('user_id');
     const TOUR_ID = params.get('tour_id');
-    
+
     if (!USER_ID) {
       document.body.innerHTML = '<div style="padding:20px;color:red;">Error: user_id required</div>';
-      throw new Error('USER_ID missing from URL');
+      throw new Error('USER_ID missing');
     }
 
-    // --- MapKit Init ---
+    // --- MAPKIT INIT ---
     mapkit.init({
-      authorizationCallback: function(done) {
-        done(MAPKIT_TOKEN);
-      }
+      authorizationCallback: done => done(MAPKIT_TOKEN)
     });
 
-const map = new mapkit.Map("map", {
-  center: new mapkit.Coordinate(34.0522, -118.2437),
-  region: new mapkit.CoordinateRegion(
-    new mapkit.Coordinate(34.0522, -118.2437),
-    new mapkit.CoordinateSpan(0.4, 0.5)
-  ),
+    const DEFAULT_CENTER = new mapkit.Coordinate(34.0522, -118.2437);
 
-  // 🔵 USER LOCATION
-  showsUserLocation: true,
-  tracksUserLocation: true,
-  showsUserLocationControl: true,
+    const map = new mapkit.Map('map', {
+      center: DEFAULT_CENTER,
+      region: new mapkit.CoordinateRegion(
+        DEFAULT_CENTER,
+        new mapkit.CoordinateSpan(0.4, 0.5)
+      ),
 
-  showsCompass: mapkit.FeatureVisibility.Hidden,
-  showsScale: false,
-  showsMapTypeControl: false,
-  isZoomEnabled: true,
-  isScrollEnabled: true
-});
-map.addEventListener("user-location-change", (event) => {
-  if (!event.coordinate) return;
+      // 🔵 USER LOCATION (THIS IS WHAT YOU ASKED FOR)
+      showsUserLocation: true,
+      tracksUserLocation: false,
+      showsUserLocationControl: true,
 
-  const region = new mapkit.CoordinateRegion(
-    event.coordinate,
-    new mapkit.CoordinateSpan(0.01, 0.01)
-  );
+      showsCompass: mapkit.FeatureVisibility.Hidden,
+      showsScale: false,
+      showsMapTypeControl: false,
+      isZoomEnabled: true,
+      isScrollEnabled: true
+    });
 
-  map.setRegion(region, true);
-});
+    // --- ZOOM TO USER ON FIRST FIX ---
+    let didZoomToUser = false;
 
+    map.addEventListener('user-location-change', event => {
+      if (!event.coordinate || didZoomToUser) return;
 
-    // --- State ---
+      didZoomToUser = true;
+
+      map.setRegion(
+        new mapkit.CoordinateRegion(
+          event.coordinate,
+          new mapkit.CoordinateSpan(0.02, 0.02)
+        ),
+        true
+      );
+    });
+
+    // --- STATE ---
     let allBuildings = [];
     let unlockedSet = new Set();
     let tourStops = [];
@@ -86,77 +94,54 @@ map.addEventListener("user-location-change", (event) => {
     let buildingAnnotations = [];
     let routePolylines = [];
 
-    // --- Helper: Supabase fetch ---
+    // --- SUPABASE FETCH ---
     async function supaJson(path) {
       const res = await fetch(`${SUPABASE_URL}${path}`, {
         headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'Accept': 'application/json'
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          Accept: 'application/json'
         }
       });
-      if (!res.ok) {
-        const error = await res.text();
-        console.error('Supabase error:', error);
-        throw new Error(`Supabase: ${res.status} ${error}`);
-      }
+      if (!res.ok) throw new Error(await res.text());
       return res.json();
     }
 
-    // --- Load data functions ---
+    // --- LOAD DATA ---
     async function loadBuildingsOnce() {
-      try {
-        allBuildings = await supaJson(
-          `/rest/v1/buildings?select=id,title,latitude,longitude,image,neighborhood_id,is_free`
-        );
-        console.log(`Loaded ${allBuildings.length} buildings`);
-      } catch (err) {
-        console.error('Failed to load buildings:', err);
-        allBuildings = [];
-      }
+      allBuildings = await supaJson(
+        '/rest/v1/buildings?select=id,title,latitude,longitude,image,neighborhood_id,is_free'
+      );
     }
 
     async function loadUnlockedOnce() {
       try {
         const rows = await supaJson(
-          `/rest/v1/user_building_unlocks?user_id=eq.${encodeURIComponent(USER_ID)}&select=building_id`
+          `/rest/v1/user_building_unlocks?user_id=eq.${USER_ID}&select=building_id`
         );
         unlockedSet = new Set(rows.map(r => r.building_id));
-        console.log(`User has ${unlockedSet.size} unlocked buildings`);
-      } catch (err) {
-        console.log('No unlocked buildings data');
+      } catch {
         unlockedSet = new Set();
       }
     }
 
     async function loadTourData(tourId) {
       if (!tourId) return;
-      
-      try {
-        const stops = await supaJson(
-          `/rest/v1/tour_stops?tour_id=eq.${encodeURIComponent(tourId)}&select=building_id,stop_order&order=stop_order`
-        );
-        tourStops = stops;
-        console.log(`Tour has ${tourStops.length} stops`);
 
-        try {
-          const route = await supaJson(
-            `/rest/v1/tour_routes?tour_id=eq.${encodeURIComponent(tourId)}&select=route_points,route_order&order=route_order`
-          );
-          tourRoute = route;
-          console.log(`Tour has ${tourRoute.length} route segments`);
-        } catch (err) {
-          console.log('No tour route data');
-          tourRoute = [];
-        }
-      } catch (err) {
-        console.error('Failed to load tour data:', err);
-        tourStops = [];
+      tourStops = await supaJson(
+        `/rest/v1/tour_stops?tour_id=eq.${tourId}&select=building_id,stop_order&order=stop_order`
+      );
+
+      try {
+        tourRoute = await supaJson(
+          `/rest/v1/tour_routes?tour_id=eq.${tourId}&select=route_points,route_order&order=route_order`
+        );
+      } catch {
         tourRoute = [];
       }
     }
 
-    // --- Pin management ---
+    // --- MAP HELPERS ---
     function clearPins() {
       buildingAnnotations.forEach(a => map.removeAnnotation(a));
       buildingAnnotations = [];
@@ -167,45 +152,63 @@ map.addEventListener("user-location-change", (event) => {
       routePolylines = [];
     }
 
+    function fitToPins() {
+      if (!buildingAnnotations.length) return;
+
+      let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+
+      buildingAnnotations.forEach(a => {
+        minLat = Math.min(minLat, a.coordinate.latitude);
+        maxLat = Math.max(maxLat, a.coordinate.latitude);
+        minLng = Math.min(minLng, a.coordinate.longitude);
+        maxLng = Math.max(maxLng, a.coordinate.longitude);
+      });
+
+      map.setRegion(
+        new mapkit.CoordinateRegion(
+          new mapkit.Coordinate((minLat + maxLat) / 2, (minLng + maxLng) / 2),
+          new mapkit.CoordinateSpan(
+            Math.max(maxLat - minLat, 0.01),
+            Math.max(maxLng - minLng, 0.01)
+          )
+        ),
+        true
+      );
+    }
+
     function addPins(buildings) {
       clearPins();
-      
+
       buildings.forEach(b => {
         if (!b.latitude || !b.longitude) return;
 
         const ann = new mapkit.MarkerAnnotation(
-          new mapkit.Coordinate(Number(b.latitude), Number(b.longitude)),
+          new mapkit.Coordinate(+b.latitude, +b.longitude),
           {
-            color: NEIGHBORHOOD_COLORS[b.neighborhood_id] || '#666666',
-            glyphText: '',
+            color: NEIGHBORHOOD_COLORS[b.neighborhood_id] || '#666',
             title: b.title,
             data: b
           }
         );
 
         ann.callout = {
-          calloutElementForAnnotation: function(annotation) {
-            const building = annotation.data;
-            const callout = document.createElement('div');
-            callout.style.cssText = `
-              width:155px;height:155px;border-radius:12px;overflow:hidden;
-              box-shadow:0 8px 24px rgba(0,0,0,0.25);cursor:pointer;background:white;
+          calloutElementForAnnotation: annotation => {
+            const el = document.createElement('div');
+            el.style.cssText = `
+              width:155px;height:155px;border-radius:12px;
+              overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.25);
             `;
-            callout.innerHTML = building.image
-              ? `<img src="${building.image}" alt="${building.title}" style="width:100%;height:100%;object-fit:cover;display:block;" />`
-              : `<div style="width:100%;height:100%;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:14px;color:#666;">No Image</div>`;
+            el.innerHTML = b.image
+              ? `<img src="${b.image}" style="width:100%;height:100%;object-fit:cover;">`
+              : `<div style="background:#ddd;width:100%;height:100%;display:flex;align-items:center;justify-content:center;">No Image</div>`;
 
-            callout.addEventListener('click', () => {
-              if (window.ReactNativeWebView) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  action: 'navigateToBuilding',
-                  buildingId: building.id,
-                  buildingTitle: building.title
-                }));
-              }
-            });
-
-            return callout;
+            el.onclick = () => {
+              window.ReactNativeWebView?.postMessage(JSON.stringify({
+                action: 'navigateToBuilding',
+                buildingId: b.id
+              }));
+            };
+            return el;
           }
         };
 
@@ -213,105 +216,48 @@ map.addEventListener("user-location-change", (event) => {
         buildingAnnotations.push(ann);
       });
 
-  if (buildingAnnotations.length > 0) {
-    const coords = buildingAnnotations.map(a => a.coordinate);
-    const region = mapkit.CoordinateRegion.regionFittingCoordinates(coords, {
-      minimumSpan: new mapkit.CoordinateSpan(0.01, 0.01) // Minimum zoom level
-    });
-    map.setRegion(region, true); // true = animated transition
-  }
-
-  console.log(`Showing ${buildingAnnotations.length} pins`);
-}
+      fitToPins();
+    }
 
     function addRoutePolylines() {
       clearRoutes();
-      
-      if (!tourRoute || tourRoute.length === 0) return;
 
       tourRoute.forEach(segment => {
-        if (!segment.route_points) return;
+        const points = JSON.parse(segment.route_points || '[]');
+        if (points.length < 2) return;
 
-        try {
-          const points = JSON.parse(segment.route_points);
-          const coordinates = points.map(p => new mapkit.Coordinate(p.lat, p.lng));
-          
-          if (coordinates.length < 2) return;
+        const coords = points.map(p => new mapkit.Coordinate(p.lat, p.lng));
 
-          const polyline = new mapkit.PolylineOverlay(coordinates, {
-            style: new mapkit.Style({
-              strokeColor: '#1150AB',
-              strokeWidth: 4,
-              strokeOpacity: 0.8
-            })
-          });
-
-          map.addOverlay(polyline);
-          routePolylines.push(polyline);
-        } catch (err) {
-          console.error('Failed to parse route points:', err);
-        }
-      });
-
-      console.log(`Added ${routePolylines.length} route segments`);
-    }
-
-    // --- Filter logic ---
-    function applyFilters() {
-      // Read filter parameters - default to true if not specified  
-      const showAvailable = params.get('show_available') !== 'false';
-      const showLocked = params.get('show_locked') !== 'false';
-
-      let filteredBuildings = [];
-
-      if (TOUR_ID) {
-        // Tour mode: show only tour stops regardless of filters
-        const tourStopIds = new Set(tourStops.map(s => s.building_id));
-        filteredBuildings = allBuildings.filter(b => tourStopIds.has(b.id));
-        
-        addRoutePolylines();
-        
-        if (filteredBuildings.length > 0) {
-          const coords = filteredBuildings.map(b => new mapkit.Coordinate(Number(b.latitude), Number(b.longitude)));
-          const region = mapkit.CoordinateRegion.regionFittingCoordinates(coords);
-          map.setRegion(region, true);
-        }
-      } else {
-        // Filter mode: Two groups - Available vs Locked
-        filteredBuildings = allBuildings.filter(b => {
-          // Determine if building is available to user
-          const isFree = b.is_free === true;
-          const isUnlocked = unlockedSet.has(b.id);
-          const isAvailable = isFree || isUnlocked; // Free OR unlocked = available
-          const isLocked = !isAvailable; // Not available = locked
-
-          // Simple two-group logic
-          if (isAvailable) {
-            return showAvailable;
-          } else {
-            return showLocked;
-          }
+        const polyline = new mapkit.PolylineOverlay(coords, {
+          style: new mapkit.Style({
+            strokeColor: '#1150AB',
+            strokeWidth: 4,
+            strokeOpacity: 0.8
+          })
         });
-      }
 
-      addPins(filteredBuildings);
+        map.addOverlay(polyline);
+        routePolylines.push(polyline);
+      });
     }
 
-    // --- Initialize ---
-    (async function init() {
-      try {
-        await loadBuildingsOnce();
-        await loadUnlockedOnce();
-        
-        if (TOUR_ID) {
-          await loadTourData(TOUR_ID);
-        }
-
-        applyFilters();
-      } catch (err) {
-        console.error('Initialization error:', err);
-        document.body.innerHTML = `<div style="padding:20px;color:red;">Error: ${err.message}</div>`;
+    // --- FILTER LOGIC ---
+    function applyFilters() {
+      if (TOUR_ID) {
+        const stopIds = new Set(tourStops.map(s => s.building_id));
+        addPins(allBuildings.filter(b => stopIds.has(b.id)));
+        addRoutePolylines();
+      } else {
+        addPins(allBuildings);
       }
+    }
+
+    // --- INIT ---
+    (async function init() {
+      await loadBuildingsOnce();
+      await loadUnlockedOnce();
+      await loadTourData(TOUR_ID);
+      applyFilters();
     })();
   </script>
 </body>
