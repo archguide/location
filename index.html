@@ -100,13 +100,14 @@
       try {
         console.log('Attempting to save map position:', { latitude, longitude, zoomLevel, user_id: USER_ID });
         
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_map_state`, {
-          method: 'POST',
+        // Use PATCH with upsert to update existing record
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_map_state?user_id=eq.${encodeURIComponent(USER_ID)}`, {
+          method: 'PATCH',
           headers: {
             'apikey': SUPABASE_ANON_KEY,
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates'
+            'Prefer': 'return=representation'
           },
           body: JSON.stringify({
             user_id: USER_ID,
@@ -153,13 +154,14 @@
       try {
         console.log('Attempting to save selected building:', { buildingId, buildingTitle, user_id: USER_ID });
         
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_selections`, {
-          method: 'POST',
+        // Use PATCH with upsert to update existing record
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_selections?user_id=eq.${encodeURIComponent(USER_ID)}`, {
+          method: 'PATCH',
           headers: {
             'apikey': SUPABASE_ANON_KEY,
             'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
             'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates'
+            'Prefer': 'return=representation'
           },
           body: JSON.stringify({
             user_id: USER_ID,
