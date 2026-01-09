@@ -95,6 +95,93 @@
       return res.json();
     }
 
+    // --- Helper: Save map position to Supabase ---
+    async function saveMapPosition(latitude, longitude, zoomLevel) {
+      try {
+        console.log('Attempting to save map position:', { latitude, longitude, zoomLevel, user_id: USER_ID });
+        
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_map_state`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates'
+          },
+          body: JSON.stringify({
+            user_id: USER_ID,
+            center_latitude: latitude,
+            center_longitude: longitude,
+            zoom_level: zoomLevel,
+            updated_at: new Date().toISOString()
+          })
+        });
+        
+        const responseText = await res.text();
+        console.log('Save map position response:', res.status, responseText);
+        
+        if (!res.ok) {
+          console.error('Failed to save map position:', res.status, responseText);
+        } else {
+          console.log('✅ Map position saved successfully');
+        }
+      } catch (err) {
+        console.error('Error saving map position:', err);
+      }
+    }
+
+    // --- Helper: Load saved map position from Supabase ---
+    async function loadMapPosition() {
+      try {
+        const rows = await supaJson(
+          `/rest/v1/user_map_state?user_id=eq.${encodeURIComponent(USER_ID)}&select=center_latitude,center_longitude,zoom_level&limit=1`
+        );
+        
+        if (rows && rows.length > 0) {
+          const saved = rows[0];
+          console.log('Loaded saved map position:', saved);
+          return saved;
+        }
+      } catch (err) {
+        console.log('No saved map position');
+      }
+      return null;
+    }
+
+    // --- Helper: Save selected building to Supabase ---
+    async function saveSelectedBuilding(buildingId, buildingTitle) {
+      try {
+        console.log('Attempting to save selected building:', { buildingId, buildingTitle, user_id: USER_ID });
+        
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/user_selections`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates'
+          },
+          body: JSON.stringify({
+            user_id: USER_ID,
+            selected_building_id: buildingId,
+            selected_building_title: buildingTitle,
+            selected_at: new Date().toISOString()
+          })
+        });
+        
+        const responseText = await res.text();
+        console.log('Save selection response:', res.status, responseText);
+        
+        if (!res.ok) {
+          console.error('Failed to save selection:', res.status, responseText);
+        } else {
+          console.log('✅ Selected building saved successfully');
+        }
+      } catch (err) {
+        console.error('Error saving selection:', err);
+      }
+    }
+
     // --- Helper: Calculate distance in miles ---
     function calculateDistance(lat1, lon1, lat2, lon2) {
       const R = 3959; // Earth's radius in miles
@@ -136,7 +223,7 @@
     async function loadFavoritesOnce() {
       try {
         const rows = await supaJson(
-          `/rest/v1/user_favorites?user_id=eq.${encodeURIComponent(USER_ID)}&select=building_id`
+          `/rest/v1/favorites?user_id=eq.${encodeURIComponent(USER_ID)}&select=building_id`
         );
         favoritesSet = new Set(rows.map(r => r.building_id));
         console.log(`User has ${favoritesSet.size} favorites`);
@@ -249,18 +336,20 @@
               box-shadow:0 8px 24px rgba(0,0,0,0.25);cursor:pointer;background:white;
             `;
             callout.innerHTML = building.image
-              ? `<img src="${building.image}" alt="${building.title}" style="width:100%;height:100%;object-fit:cover;display:block;" />`
-              : `<div style="width:100%;height:100%;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:14px;color:#666;">No Image</div>`;
+              ? `<img src="${building.image}" alt="${building.title}" style="width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;" />`
+              : `<div style="width:100%;height:100%;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:14px;color:#666;pointer-events:none;">No Image</div>`;
 
-            callout.addEventListener('click', () => {
-              if (window.ReactNativeWebView) {
-                window.ReactNativeWebView.postMessage(JSON.stringify({
-                  action: 'navigateToBuilding',
-                  buildingId: building.id,
-                  buildingTitle: building.title
-                }));
-              }
-            });
+            // Add click handler directly to callout
+            callout.onclick = function(e) {
+              console.log('🔵 Callout clicked!');
+              console.log('Building ID:', building.id);
+              console.log('Building Title:', building.title);
+              
+              // Save selected building to Supabase
+              saveSelectedBuilding(building.id, building.title);
+              
+              e.stopPropagation();
+            };
 
             return callout;
           }
@@ -405,6 +494,7 @@
         // Get user location if tracking enabled or proximity filter active
         const trackLocation = params.get('track_location') === 'true';
         const showNearby = params.get('show_nearby') === 'true';
+        const restorePosition = params.get('restore_position') !== 'false'; // Default true
         
         if (trackLocation || showNearby) {
           // First try URL parameters (passed from Draftbit)
@@ -429,6 +519,51 @@
         }
 
         applyFilters();
+
+        // After filters applied, try to restore saved map position
+        if (restorePosition && !TOUR_ID) {
+          const savedPosition = await loadMapPosition();
+          if (savedPosition) {
+            // Calculate appropriate span based on zoom level
+            const span = savedPosition.zoom_level || 0.4;
+            map.setRegionAnimated(
+              new mapkit.CoordinateRegion(
+                new mapkit.Coordinate(savedPosition.center_latitude, savedPosition.center_longitude),
+                new mapkit.CoordinateSpan(span, span)
+              ),
+              false
+            );
+          }
+        }
+
+        // Listen for map region changes and save position
+        // Debounce to avoid too many saves
+        let saveTimeout;
+        
+        console.log('🗺️ Setting up map event listeners...');
+        
+        // Test different event names to see which one fires
+        map.addEventListener('region-change-start', () => {
+          console.log('🔵 region-change-start fired');
+        });
+        
+        map.addEventListener('region-change-end', () => {
+          console.log('🟢 region-change-end fired');
+          clearTimeout(saveTimeout);
+          saveTimeout = setTimeout(() => {
+            const center = map.center;
+            const region = map.region;
+            const span = region.span.latitudeDelta;
+            console.log('📍 Saving position after map move:', { lat: center.latitude, lng: center.longitude, zoom: span });
+            saveMapPosition(center.latitude, center.longitude, span);
+          }, 500);
+        });
+        
+        // Also try this alternative event
+        map.addEventListener('zoom-end', () => {
+          console.log('🔍 zoom-end fired');
+        });
+
       } catch (err) {
         console.error('Initialization error:', err);
         document.body.innerHTML = `<div style="padding:20px;color:red;">Error: ${err.message}</div>`;
