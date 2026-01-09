@@ -31,6 +31,8 @@
       'WHO': '#F4A261'
     };
 
+    const DEFAULT_PROXIMITY_RADIUS = 2; // miles
+
     // --- Get parameters from URL ---
     const params = new URLSearchParams(window.location.search);
     const USER_ID = params.get('user_id');
@@ -58,20 +60,21 @@
       showsScale: false,
       showsMapTypeControl: false,
       isZoomEnabled: true,
-      showsUserLocation: true,
-showsUserLocationControl: true,
-tracksUserLocation: false,
-      isScrollEnabled: true
-      
+      isScrollEnabled: true,
+      showsUserLocation: params.get('track_location') === 'true',
+      showsUserLocationControl: false
     });
 
     // --- State ---
     let allBuildings = [];
     let unlockedSet = new Set();
+    let favoritesSet = new Set();
+    let savedRouteSet = new Set();
     let tourStops = [];
     let tourRoute = [];
     let buildingAnnotations = [];
     let routePolylines = [];
+    let userLocation = null;
 
     // --- Helper: Supabase fetch ---
     async function supaJson(path) {
@@ -88,6 +91,18 @@ tracksUserLocation: false,
         throw new Error(`Supabase: ${res.status} ${error}`);
       }
       return res.json();
+    }
+
+    // --- Helper: Calculate distance in miles ---
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+      const R = 3959; // Earth's radius in miles
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
     }
 
     // --- Load data functions ---
@@ -116,6 +131,32 @@ tracksUserLocation: false,
       }
     }
 
+    async function loadFavoritesOnce() {
+      try {
+        const rows = await supaJson(
+          `/rest/v1/user_favorites?user_id=eq.${encodeURIComponent(USER_ID)}&select=building_id`
+        );
+        favoritesSet = new Set(rows.map(r => r.building_id));
+        console.log(`User has ${favoritesSet.size} favorites`);
+      } catch (err) {
+        console.log('No favorites data');
+        favoritesSet = new Set();
+      }
+    }
+
+    async function loadSavedRouteOnce() {
+      try {
+        const rows = await supaJson(
+          `/rest/v1/user_routes?user_id=eq.${encodeURIComponent(USER_ID)}&select=building_id`
+        );
+        savedRouteSet = new Set(rows.map(r => r.building_id));
+        console.log(`User has ${savedRouteSet.size} buildings in saved route`);
+      } catch (err) {
+        console.log('No saved route data');
+        savedRouteSet = new Set();
+      }
+    }
+
     async function loadTourData(tourId) {
       if (!tourId) return;
       
@@ -141,6 +182,33 @@ tracksUserLocation: false,
         tourStops = [];
         tourRoute = [];
       }
+    }
+
+    // --- Get user location ---
+    async function getUserLocation() {
+      return new Promise((resolve) => {
+        if (!navigator.geolocation) {
+          console.log('Geolocation not supported');
+          resolve(null);
+          return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const location = {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude
+            };
+            console.log('User location:', location);
+            resolve(location);
+          },
+          (error) => {
+            console.log('Location error:', error.message);
+            resolve(null);
+          },
+          { timeout: 5000, enableHighAccuracy: true }
+        );
+      });
     }
 
     // --- Pin management ---
@@ -200,6 +268,13 @@ tracksUserLocation: false,
         buildingAnnotations.push(ann);
       });
 
+      // Always zoom to show all pins
+      if (buildingAnnotations.length) {
+        map.showItems(buildingAnnotations);
+      }
+      console.log(`Showing ${buildingAnnotations.length} pins`);
+    }
+
     function addRoutePolylines() {
       clearRoutes();
       
@@ -237,6 +312,11 @@ tracksUserLocation: false,
       // Read filter parameters - default to true if not specified  
       const showAvailable = params.get('show_available') !== 'false';
       const showLocked = params.get('show_locked') !== 'false';
+      const showFavorites = params.get('show_favorites') === 'true';
+      const showSavedRoute = params.get('show_saved_route') === 'true';
+      const showNearby = params.get('show_nearby') === 'true';
+      const neighborhoodsParam = params.get('neighborhoods');
+      const proximityRadius = parseFloat(params.get('proximity_radius')) || DEFAULT_PROXIMITY_RADIUS;
 
       let filteredBuildings = [];
 
@@ -253,20 +333,55 @@ tracksUserLocation: false,
           map.setRegion(region, true);
         }
       } else {
-        // Filter mode: Two groups - Available vs Locked
+        // Filter mode with AND logic
         filteredBuildings = allBuildings.filter(b => {
-          // Determine if building is available to user
+          // 1. Available/Locked filter
           const isFree = b.is_free === true;
           const isUnlocked = unlockedSet.has(b.id);
-          const isAvailable = isFree || isUnlocked; // Free OR unlocked = available
-          const isLocked = !isAvailable; // Not available = locked
+          const isAvailable = isFree || isUnlocked;
+          const isLocked = !isAvailable;
 
-          // Simple two-group logic
-          if (isAvailable) {
-            return showAvailable;
-          } else {
-            return showLocked;
+          let passesAvailableFilter = true;
+          if (isAvailable && !showAvailable) passesAvailableFilter = false;
+          if (isLocked && !showLocked) passesAvailableFilter = false;
+
+          // 2. Favorites filter
+          let passesFavoritesFilter = true;
+          if (showFavorites) {
+            passesFavoritesFilter = favoritesSet.has(b.id);
           }
+
+          // 3. Saved Route filter
+          let passesSavedRouteFilter = true;
+          if (showSavedRoute) {
+            passesSavedRouteFilter = savedRouteSet.has(b.id);
+          }
+
+          // 4. Neighborhood filter
+          let passesNeighborhoodFilter = true;
+          if (neighborhoodsParam) {
+            const allowedNeighborhoods = neighborhoodsParam.split(',').map(n => n.trim());
+            passesNeighborhoodFilter = allowedNeighborhoods.includes(b.neighborhood_id);
+          }
+
+          // 5. Proximity filter
+          let passesProximityFilter = true;
+          if (showNearby && userLocation) {
+            const distance = calculateDistance(
+              userLocation.latitude,
+              userLocation.longitude,
+              Number(b.latitude),
+              Number(b.longitude)
+            );
+            passesProximityFilter = distance <= proximityRadius;
+          }
+
+          // AND logic: must pass all active filters
+          return passesAvailableFilter && 
+                 passesFavoritesFilter && 
+                 passesSavedRouteFilter && 
+                 passesNeighborhoodFilter && 
+                 passesProximityFilter;
         });
       }
 
@@ -278,9 +393,27 @@ tracksUserLocation: false,
       try {
         await loadBuildingsOnce();
         await loadUnlockedOnce();
+        await loadFavoritesOnce();
+        await loadSavedRouteOnce();
         
         if (TOUR_ID) {
           await loadTourData(TOUR_ID);
+        }
+
+        // Get user location if tracking enabled or proximity filter active
+        const trackLocation = params.get('track_location') === 'true';
+        const showNearby = params.get('show_nearby') === 'true';
+        
+        if (trackLocation || showNearby) {
+          userLocation = await getUserLocation();
+          
+          // Center on user location on initial load if tracking enabled
+          if (trackLocation && userLocation) {
+            map.setCenterAnimated(
+              new mapkit.Coordinate(userLocation.latitude, userLocation.longitude),
+              false
+            );
+          }
         }
 
         applyFilters();
