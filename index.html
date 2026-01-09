@@ -6,6 +6,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Arch Guide – Buildings Map</title>
 
+  <link rel="preconnect" href="https://cdn.apple-mapkit.com">
+  <link rel="dns-prefetch" href="https://cdn.apple-mapkit.com">
+  <link rel="preconnect" href="https://msuzmrfzzkqffhpilirb.supabase.co">
+  <link rel="dns-prefetch" href="https://msuzmrfzzkqffhpilirb.supabase.co">
+
   <script src="https://cdn.apple-mapkit.com/mk/5.x.x/mapkit.js" crossorigin></script>
 
   <style>
@@ -484,87 +489,85 @@
     // --- Initialize ---
     (async function init() {
       try {
-        await loadBuildingsOnce();
-        await loadUnlockedOnce();
-        await loadFavoritesOnce();
-        await loadSavedRouteOnce();
-        
-        if (TOUR_ID) {
-          await loadTourData(TOUR_ID);
-        }
+        // Show map immediately (renders faster)
+        console.log('Map initialized, loading data...');
 
-        // Get user location if tracking enabled or proximity filter active
-        const trackLocation = params.get('track_location') === 'true';
-        const showNearby = params.get('show_nearby') === 'true';
-        const restorePosition = params.get('restore_position') !== 'false'; // Default true
-        
-        if (trackLocation || showNearby) {
-          // First try URL parameters (passed from Draftbit)
-          if (USER_LAT && USER_LNG) {
-            userLocation = {
-              latitude: parseFloat(USER_LAT),
-              longitude: parseFloat(USER_LNG)
-            };
-            console.log('User location from URL params:', userLocation);
-          } else {
-            // Fallback to browser geolocation
-            userLocation = await getUserLocation();
-          }
+        // Load data in background after small delay
+        setTimeout(async () => {
+          await loadBuildingsOnce();
+          await loadUnlockedOnce();
+          await loadFavoritesOnce();
+          await loadSavedRouteOnce();
           
-          // Center on user location on initial load if tracking enabled
-          if (trackLocation && userLocation) {
-            map.setCenterAnimated(
-              new mapkit.Coordinate(userLocation.latitude, userLocation.longitude),
-              false
-            );
+          if (TOUR_ID) {
+            await loadTourData(TOUR_ID);
           }
-        }
 
-        applyFilters();
-
-        // After filters applied, try to restore saved map position
-        if (restorePosition && !TOUR_ID) {
-          const savedPosition = await loadMapPosition();
-          if (savedPosition) {
-            // Calculate appropriate span based on zoom level
-            const span = savedPosition.zoom_level || 0.4;
-            map.setRegionAnimated(
-              new mapkit.CoordinateRegion(
-                new mapkit.Coordinate(savedPosition.center_latitude, savedPosition.center_longitude),
-                new mapkit.CoordinateSpan(span, span)
-              ),
-              false
-            );
+          // Get user location if tracking enabled or proximity filter active
+          const trackLocation = params.get('track_location') === 'true';
+          const showNearby = params.get('show_nearby') === 'true';
+          const restorePosition = params.get('restore_position') !== 'false'; // Default true
+          
+          if (trackLocation || showNearby) {
+            // First try URL parameters (passed from Draftbit)
+            if (USER_LAT && USER_LNG) {
+              userLocation = {
+                latitude: parseFloat(USER_LAT),
+                longitude: parseFloat(USER_LNG)
+              };
+              console.log('User location from URL params:', userLocation);
+            } else {
+              // Fallback to browser geolocation
+              userLocation = await getUserLocation();
+            }
+            
+            // Center on user location on initial load if tracking enabled
+            if (trackLocation && userLocation) {
+              map.setCenterAnimated(
+                new mapkit.Coordinate(userLocation.latitude, userLocation.longitude),
+                false
+              );
+            }
           }
-        }
 
-        // Listen for map region changes and save position
-        // Debounce to avoid too many saves
-        let saveTimeout;
-        
-        console.log('🗺️ Setting up map event listeners...');
-        
-        // Test different event names to see which one fires
-        map.addEventListener('region-change-start', () => {
-          console.log('🔵 region-change-start fired');
-        });
-        
-        map.addEventListener('region-change-end', () => {
-          console.log('🟢 region-change-end fired');
-          clearTimeout(saveTimeout);
-          saveTimeout = setTimeout(() => {
-            const center = map.center;
-            const region = map.region;
-            const span = region.span.latitudeDelta;
-            console.log('📍 Saving position after map move:', { lat: center.latitude, lng: center.longitude, zoom: span });
-            saveMapPosition(center.latitude, center.longitude, span);
-          }, 500);
-        });
-        
-        // Also try this alternative event
-        map.addEventListener('zoom-end', () => {
-          console.log('🔍 zoom-end fired');
-        });
+          applyFilters();
+
+          // After filters applied, try to restore saved map position
+          if (restorePosition && !TOUR_ID) {
+            const savedPosition = await loadMapPosition();
+            if (savedPosition) {
+              // Calculate appropriate span based on zoom level
+              const span = savedPosition.zoom_level || 0.4;
+              map.setRegionAnimated(
+                new mapkit.CoordinateRegion(
+                  new mapkit.Coordinate(savedPosition.center_latitude, savedPosition.center_longitude),
+                  new mapkit.CoordinateSpan(span, span)
+                ),
+                false
+              );
+            }
+          }
+
+          // Listen for map region changes and save position
+          // Debounce to avoid too many saves
+          let saveTimeout;
+          
+          console.log('🗺️ Setting up map event listeners...');
+          
+          map.addEventListener('region-change-end', () => {
+            console.log('🟢 region-change-end fired');
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+              const center = map.center;
+              const region = map.region;
+              const span = region.span.latitudeDelta;
+              console.log('📍 Saving position after map move:', { lat: center.latitude, lng: center.longitude, zoom: span });
+              saveMapPosition(center.latitude, center.longitude, span);
+            }, 500);
+          });
+
+          console.log('✅ All data loaded and map ready');
+        }, 100); // 100ms delay allows map to render first
 
       } catch (err) {
         console.error('Initialization error:', err);
