@@ -37,6 +37,8 @@
     const params = new URLSearchParams(window.location.search);
     const USER_ID = params.get('user_id');
     const TOUR_ID = params.get('tour_id');
+    const USER_LAT = params.get('user_lat');
+    const USER_LNG = params.get('user_lng');
     
     if (!USER_ID) {
       document.body.innerHTML = '<div style="padding:20px;color:red;">Error: user_id required</div>';
@@ -405,7 +407,17 @@
         const showNearby = params.get('show_nearby') === 'true';
         
         if (trackLocation || showNearby) {
-          userLocation = await getUserLocation();
+          // First try URL parameters (passed from Draftbit)
+          if (USER_LAT && USER_LNG) {
+            userLocation = {
+              latitude: parseFloat(USER_LAT),
+              longitude: parseFloat(USER_LNG)
+            };
+            console.log('User location from URL params:', userLocation);
+          } else {
+            // Fallback to browser geolocation
+            userLocation = await getUserLocation();
+          }
           
           // Center on user location on initial load if tracking enabled
           if (trackLocation && userLocation) {
